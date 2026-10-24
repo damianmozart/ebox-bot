@@ -230,13 +230,15 @@ function levelOf(name) {
   return m ? Number(m[1]) : 0;
 }
 
-// Jam server (UTC) ditampilkan sebagai jam lokal PC, karena "05:00 AM" di
-// respons itu UTC — kalau dicetak apa adanya, kelihatan seperti jam 5 pagi.
-function jamLokal(utcString) {
-  if (!utcString) return '? ';
+// Jam server di respons itu UTC. Dicetak sebagai WIB secara eksplisit (bukan
+// zona waktu mesin) supaya laptop (UTC+7) dan runner GitHub (UTC) menulis hal
+// yang sama — beda zona bikin log cloud seolah-olah sesinya buka jam 5 pagi.
+function jamWib(utcString) {
+  if (!utcString) return '?';
   const d = new Date(String(utcString).replace(' ', 'T') + 'Z');
   if (Number.isNaN(d.getTime())) return String(utcString);
-  return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const jam = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' });
+  return `${jam} WIB`;
 }
 
 /* Ambil sesi hari ini + level akun, lalu saring yang memang milik kita. */
@@ -286,7 +288,7 @@ async function freeHunt(token) {
     if (s.is_joined) { done.push(s.name); continue; }
     const full = Number(s.current_participants) >= Number(s.max_participants) && Number(s.max_participants) > 0;
     if (full) { waiting.push(`${s.name}: kuota penuh`); continue; }
-    if (!joinableSession(s)) { waiting.push(`${s.name}: buka ${jamLokal(s.open_at)}`); continue; }
+    if (!joinableSession(s)) { waiting.push(`${s.name}: buka ${jamWib(s.open_at)}`); continue; }
     if (CHECK_ONLY) return { step: 'hunt', kind: 'ready', msg: `siap ikut ${s.name} (mode cek)` };
 
     const r = await joinHunt(token, s);
@@ -334,11 +336,11 @@ async function freeHuntAwait(token) {
   const waitMs = openMs - skew - Date.now();
 
   if (waitMs > HUNT_ARM_MS) {
-    return { step: 'hunt', kind: 'waiting', msg: `buka ${jamLokal(target.open_at)} — belum masuk jendela` };
+    return { step: 'hunt', kind: 'waiting', msg: `buka ${jamWib(target.open_at)} — belum masuk jendela` };
   }
 
   if (waitMs > 0) {
-    log(`  ⏰ menunggu ${Math.round(waitMs / 1000)}s sampai ${jamLokal(target.open_at)}`);
+    log(`  ⏰ menunggu ${Math.round(waitMs / 1000)}s sampai ${jamWib(target.open_at)}`);
     await sleep(waitMs - HUNT_LEAD_MS);
   }
 
