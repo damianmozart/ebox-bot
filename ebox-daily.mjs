@@ -468,7 +468,10 @@ function loadState() {
   try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')) || {}; } catch { return {}; }
 }
 function saveState(s) {
-  try { writeFileSync(STATE_FILE, JSON.stringify(s)); } catch { /* abaikan */ }
+  try {
+    const cur = loadState();
+    writeFileSync(STATE_FILE, JSON.stringify({ ...cur, ...s }));
+  } catch { /* abaikan */ }
 }
 
 async function main() {
@@ -519,11 +522,16 @@ async function main() {
   // Notif: hanya kalau ada aksi nyata, atau ada error non-jaringan. Kondisi
   // gagal yang MENETAP (mis. token mati berhari-hari) dibungkam lewat sidik
   // jari + jeda, supaya tidak jadi spam tiap jam.
-  //
-  // `--check` itu alat diagnostik: selalu DIAM di HP (sama seperti
-  // freebox-draw.mjs di boxkia-bot). Tanpa ini, rutin "cek status" tiap jam
-  // berubah jadi notifikasi tiap jam hanya karena box sedang siap.
-  const worth = STATUS_NOTIFY || (!CHECK_ONLY && (NOTIFY_ALL || events.length > 0 || hardErrors.length > 0));
+  const st = loadState();
+  const PERIODIC_STATUS_MS = Number(process.env.EBOX_STATUS_INTERVAL_MS || (3 * 3600 * 1000));
+  const isTimeForPeriodicStatus = !CHECK_ONLY && !HUNT_ONLY && Boolean(st.lastStatusAt) &&
+    (Date.now() - Number(st.lastStatusAt) >= PERIODIC_STATUS_MS);
+
+  if (!st.lastStatusAt) {
+    saveState({ lastStatusAt: Date.now() });
+  }
+
+  const worth = STATUS_NOTIFY || isTimeForPeriodicStatus || (!CHECK_ONLY && (NOTIFY_ALL || events.length > 0 || hardErrors.length > 0));
   if (!worth) {
     if (CHECK_ONLY) log('  (mode cek — notif tidak dikirim)');
     else if (netErrors.length) log('  (gangguan jaringan — notif dilewati)');
@@ -531,15 +539,17 @@ async function main() {
     return;
   }
 
-  const head = STATUS_NOTIFY
-    ? '📊 Ebox: status terkini'
-    : results.some((r) => r.kind === 'won')
-    ? '🎁 Ebox: dapat hadiah!'
-    : results.some((r) => r.kind === 'joined')
-      ? '🏹 Ebox: ikut Treasure Hunt'
-      : events.length
-        ? '✅ Ebox: klaim harian jalan'
-        : '⚠️ Ebox: ada masalah';
+  const head = isTimeForPeriodicStatus
+    ? '📊 Ebox: status 3 jam & persiapan'
+    : STATUS_NOTIFY
+      ? '📊 Ebox: status terkini'
+      : results.some((r) => r.kind === 'won')
+        ? '🎁 Ebox: dapat hadiah!'
+        : results.some((r) => r.kind === 'joined')
+          ? '🏹 Ebox: ikut Treasure Hunt'
+          : events.length
+            ? '✅ Ebox: klaim harian jalan'
+            : '⚠️ Ebox: ada masalah';
 
   // Ringkasan akun ditaruh paling atas (seperti notif boxkia: saldo + progres),
   // diambil hanya saat notifikasi memang akan dikirim.
@@ -569,6 +579,19 @@ async function main() {
         .concat(HUNT_SESSIONS.map((s) => `   ${s.joined ? '✅' : '•'} ${jamWib(s.open_at)} ${s.name} (${s.level})${s.prize ? ` — ${s.prize}` : ''}`))
     : []).join('\n');
 
+  if (isTimeForPeriodicStatus) {
+    await ntfy(head, detail);
+    saveState({ lastStatusAt: Date.now() });
+    try {
+      const pityScript = path.join(__dirname, 'ebox-pity.mjs');
+      if (existsSync(pityScript)) {
+        import('node:child_process').then(({ fork }) => {
+          fork(pityScript, ['--notify'], { stdio: 'ignore', detached: true }).unref();
+        });
+      }
+    } catch { /* abaikan */ }
+    return;
+  }
   if (STATUS_NOTIFY) { await ntfy(head, detail); return; }   // selalu kirim, tanpa jeda
   if (events.length) saveState({});        // kondisi berubah → buka kunci notif
   else if (!NOTIFY_ALL) {

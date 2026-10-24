@@ -1,24 +1,20 @@
 #!/usr/bin/env node
 /*
- * ebox-pity.mjs — Pity Board & Analisis Waktu Gacha Terbaik untuk Ebox.
+ * ebox-pity.mjs — Pity Board & Pemantau Pity Kotak Gacha Global (Server-Wide).
  *
  * Memantau blind box dengan harga <= Rp10.000:
- * - Menghitung probabilitas drop rate resmi UR per box
- * - Menghitung rata-rata roll (expected draws) untuk dapat UR (100 / rate%)
- * - Menghitung pity terkini (jumlah roll sejak UR terakhir) dari riwayat akun
- * - Menghitung progress % vs rata-rata:
- *     >= 100% : 🔥 JATUH TEMPO (Overdue — WAKTU TERBAIK UNTUK GACHA!)
- *     >= 70%  : ⚠️ MENDEKATI
- *     < 70%   : ✅ DINGIN (Masih jauh dari rata-rata)
+ * - Menghitung pity kotak saat ini (berapa kali kotak ini di-draw oleh semua pemain sejak UR terakhir keluar).
+ * - Menghitung rata-rata roll (expected draws) untuk dapat UR (100 / rate%).
+ * - Menghitung persentase %Avg:
+ *     >= 100% : 🔥 JATUH TEMPO (Kotak sudah melewati rata-rata draw tanpa UR — WAKTU TERBAIK UNTUK GACHA!)
+ *     >= 70%  : ⚠️ MENDEKATI (Kotak mulai matang)
+ *     < 70%   : ✅ DINGIN (UR baru saja keluar)
  *
- * Pemakaian:
- *   node ebox-pity.mjs           — cetak tabel pity di terminal
- *   node ebox-pity.mjs --notify  — kirim tabel ke notifikasi ntfy HP
- *   node ebox-pity.mjs --max 15  — saring harga <= Rp15.000 (default: 10)
- *   node ebox-pity.mjs --json    — keluaran format JSON
+ * Mode Notifikasi:
+ *   --notify : Mengirim 1 notifikasi terpisah per barang ke ntfy HP.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,6 +26,7 @@ const CFG = (() => {
 const API = (process.env.EBOX_API_BASE || CFG.apiBase || 'https://admin.ebox.zone/api').replace(/\/$/, '');
 const NTFY_TOPIC = (process.env.EBOX_NTFY_TOPIC !== undefined ? process.env.EBOX_NTFY_TOPIC : CFG.ntfyTopic || '').trim();
 const NTFY_URL = process.env.EBOX_NTFY_URL || 'https://ntfy.sh';
+const STATE_FILE = path.join(__dirname, 'box_pity_state.json');
 
 const args = process.argv.slice(2);
 const NOTIFY = args.includes('--notify');
@@ -47,6 +44,13 @@ function loadToken() {
     if (t) return t;
   }
   throw new Error('Token tidak ditemukan di .ebox-token atau config.json');
+}
+
+function loadPityState() {
+  try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')) || {}; } catch { return {}; }
+}
+function savePityState(s) {
+  try { writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)); } catch { /* abaikan */ }
 }
 
 async function api(pathname, token, body = {}) {
@@ -79,6 +83,13 @@ async function ntfy(title, msg) {
   } catch {
     return false;
   }
+}
+
+function jamWib(utcString) {
+  if (!utcString) return '?';
+  const d = new Date(String(utcString).replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return String(utcString);
+  return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' }) + ' WIB';
 }
 
 async function fetchBoxesUnderPrice(token, maxPrice) {
@@ -115,6 +126,7 @@ async function fetchBoxDetails(token, box) {
 
   return {
     ...box,
+    totalSold: Number(r.data?.main_product?.total_sold ?? box.totalSold),
     urRate,
     ssrRate,
     avgDraw,
@@ -122,63 +134,83 @@ async function fetchBoxDetails(token, box) {
   };
 }
 
-async function fetchUserHistory(token) {
+async function fetchGlobalWinners(token) {
   let page = 1;
-  const histByBox = {};
-  while (page <= 20) {
-    const r = await api('/player/draw-history', token, { page, per_page: 50 });
+  const boxWins = {};
+  while (page <= 10) {
+    const r = await api('/winner', token, { page, per_page: 50 });
     const list = r.data?.data?.data || [];
     if (!list.length) break;
-    for (const item of list) {
-      const bName = item.main_product_name || 'Unknown';
-      if (!histByBox[bName]) {
-        histByBox[bName] = {
-          total: 0,
-          ur: 0,
-          ssr: 0,
-          sr: 0,
-          r: 0,
-          rollsSinceUR: 0,
-          foundUR: false,
-          latestWin: null,
-        };
-      }
-      const h = histByBox[bName];
-      h.total++;
-      const g = item.grade_name || '';
-      if (g === 'UR') {
-        h.ur++;
-        if (!h.foundUR) {
-          h.foundUR = true;
-          h.latestWin = item.sub_product_name;
-        }
-      } else if (g === 'SSR') h.ssr++;
-      else if (g === 'SR') h.sr++;
-      else if (g === 'R') h.r++;
-
-      if (!h.foundUR) h.rollsSinceUR++;
+    for (const w of list) {
+      const bId = w.main_product_id;
+      if (!boxWins[bId]) boxWins[bId] = [];
+      boxWins[bId].push(w);
     }
     if (page >= (r.data?.data?.total_pages || 1)) break;
     page++;
   }
-  return histByBox;
+  return boxWins;
 }
 
 async function main() {
   const token = loadToken();
   const rawBoxes = await fetchBoxesUnderPrice(token, MAX_PRICE);
-  const histByBox = await fetchUserHistory(token);
+  const [boxes, boxWins] = await Promise.all([
+    Promise.all(rawBoxes.map((b) => fetchBoxDetails(token, b))),
+    fetchGlobalWinners(token),
+  ]);
 
-  const boxes = await Promise.all(rawBoxes.map((b) => fetchBoxDetails(token, b)));
+  const state = loadPityState();
+  const now = Date.now();
 
   const rows = boxes.map((b) => {
-    const h = histByBox[b.name] || { total: 0, ur: 0, rollsSinceUR: 0, latestWin: null };
-    const pity = h.rollsSinceUR;
+    const wins = boxWins[b.id] || [];
+    const latestWin = wins[0] || null;
+    const boxState = state[b.id] || {};
+
+    let pity = 0;
+    let minsAgo = null;
+    let lastWinnerStr = 'Belum ada data';
+
+    if (latestWin) {
+      const winTimeMs = new Date(latestWin.created_at + 'Z').getTime();
+      minsAgo = Math.max(0, Math.round((now - winTimeMs) / 60000));
+      lastWinnerStr = `${latestWin.name} (${jamWib(latestWin.created_at)})`;
+
+      if (boxState.lastWinTime !== latestWin.created_at) {
+        // Ada UR baru yang terdeteksi
+        boxState.lastWinTime = latestWin.created_at;
+        boxState.totalSoldAtWin = b.totalSold;
+        boxState.lastWinner = latestWin.name;
+        boxState.lastAmount = latestWin.amount;
+        // Pity estimasi awal berdasarkan jeda waktu jika baru pertama kali
+        const estDrawsPerMin = b.price <= 7 ? 2.5 : b.price <= 10 ? 1.0 : 0.5;
+        pity = Math.round(minsAgo * estDrawsPerMin);
+      } else {
+        // Hitung real-time dari selisih total_sold
+        const baseline = boxState.totalSoldAtWin || (b.totalSold - Math.round(minsAgo * 2));
+        pity = Math.max(0, b.totalSold - baseline);
+      }
+    } else {
+      pity = boxState.pity || 0;
+    }
+
+    state[b.id] = {
+      ...boxState,
+      name: b.name,
+      price: b.price,
+      totalSold: b.totalSold,
+      pity,
+      updatedAt: now,
+    };
+
     const avg = b.avgDraw;
-    const pct = avg > 0 && pity > 0 ? Math.round((pity / avg) * 100) : 0;
-    const sisa = avg > 0 ? avg - pity : 0;
-    const icon = pct >= 100 ? '🔥' : pct >= 70 ? '⚠️' : '✅';
-    const status = pct >= 100 ? 'JATUH TEMPO' : pct >= 70 ? 'Mendekati' : 'Dingin';
+    const pct = avg > 0 ? Math.round((pity / avg) * 100) : 0;
+    const sisa = avg - pity;
+    const isDue = pct >= 100;
+    const isAppr = pct >= 70 && pct < 100;
+    const icon = isDue ? '🔥' : isAppr ? '⚠️' : '✅';
+    const status = isDue ? 'JATUH TEMPO' : isAppr ? 'Mendekati' : 'Dingin';
 
     return {
       id: b.id,
@@ -188,14 +220,17 @@ async function main() {
       avg,
       pct,
       sisa,
-      totalDraws: h.total,
-      urWon: h.ur,
+      totalSold: b.totalSold,
       urRate: b.urRate,
+      lastWinnerStr,
+      minsAgo,
       topPrizes: b.topPrizes.slice(0, 2).join(', '),
       icon,
       status,
     };
   }).sort((a, b) => b.pct - a.pct);
+
+  savePityState(state);
 
   if (JSON_OUT) {
     console.log(JSON.stringify(rows, null, 2));
@@ -203,8 +238,8 @@ async function main() {
   }
 
   const lines = [];
-  lines.push(`🎰 EBOX PITY BOARD (Harga ≤ Rp${MAX_PRICE.toLocaleString('id-ID')}.000)`);
-  lines.push('─'.repeat(72));
+  lines.push(`🎰 EBOX PITY KOTAK GLOBAL (Harga ≤ Rp${MAX_PRICE.toLocaleString('id-ID')}.000)`);
+  lines.push('─'.repeat(74));
   lines.push(
     'Barang Gacha'.padEnd(30) +
     'Harga'.padStart(8) +
@@ -213,42 +248,58 @@ async function main() {
     '%Avg'.padStart(7) +
     'Sisa'.padStart(6) + '  Status'
   );
-  lines.push('─'.repeat(72));
+  lines.push('─'.repeat(74));
 
   for (const r of rows) {
     const shortName = r.name.length > 28 ? r.name.slice(0, 27) + '…' : r.name;
-    const priceStr = `Rp${r.price}`;
+    const priceStr = `Rp${r.price}k`;
     lines.push(
       shortName.padEnd(30) +
       priceStr.padStart(8) +
       String(r.pity).padStart(6) +
       String(r.avg).padStart(7) +
       (r.pct ? `${r.pct}%` : '-').padStart(7) +
-      (r.pity ? String(r.sisa) : '-').padStart(6) +
+      String(r.sisa).padStart(6) +
       `  ${r.icon} ${r.status}`
     );
   }
-  lines.push('─'.repeat(72));
+  lines.push('─'.repeat(74));
+
   const due = rows.filter((r) => r.pct >= 100);
   if (due.length) {
-    lines.push(`💡 WAKTU TERBAIK GACHA SEKARANG:`);
+    lines.push(`💡 KOTAK YANG SUDAH JATUH TEMPO (WAKTU TERBAIK GACHA):`);
     for (const d of due) {
-      lines.push(`   👉 ${d.name} (Pity: ${d.pity} roll / Rata2: ${d.avg} roll — Sudah ${d.pct}%!)`);
+      lines.push(`   👉 ${d.name} (${d.pity} draw tanpa UR / Rata2: ${d.avg} draw — ${d.pct}%)`);
+      lines.push(`      UR Terakhir: ${d.lastWinnerStr}`);
       if (d.topPrizes) lines.push(`      Hadiah UR: ${d.topPrizes}`);
     }
   } else {
-    lines.push('💡 Belum ada item yang melewati rata-rata draw.');
+    lines.push('💡 Belum ada kotak yang melewati rata-rata draw.');
   }
 
   const output = lines.join('\n');
   console.log(output);
 
   if (NOTIFY) {
-    const notifMsg = rows.map((r) => {
-      return `${r.icon} ${r.name} (Rp${r.price}k)\n   Pity: ${r.pity} / Rata2: ${r.avg} roll (${r.pct}%)${r.pct >= 100 ? ' — 🔥 WAKTU TERBAIK!' : ''}`;
-    }).join('\n\n');
-    await ntfy('🎰 Ebox: Pity Board (Rekomendasi Gacha)', notifMsg);
-    console.log('\n✓ Notifikasi Pity Board berhasil dikirim ke ntfy HP.');
+    console.log(`\nMengirim ${rows.length} notifikasi pity kotak (1 notif per barang)...`);
+    for (const r of rows) {
+      const title = `${r.icon} [Pity Kotak] ${r.name}`;
+      const msgLines = [
+        `💰 Harga: Rp${Number(r.price).toLocaleString('id-ID')}.000 · Status: ${r.status}`,
+        `🎰 Pity Kotak: ${r.pity} draw tanpa UR (Rata-rata: ${r.avg} draw)`,
+        `📈 Progress: ${r.pct}% (${r.sisa <= 0 ? `${Math.abs(r.sisa)} draw lewat rata-rata` : `sisa ${r.sisa} draw lagi`})`,
+        `👑 UR Terakhir: ${r.lastWinnerStr} (${r.minsAgo != null ? `${r.minsAgo} menit lalu` : '-'})`,
+      ];
+      if (r.pct >= 100) {
+        msgLines.push(`🔥 KOTAK SUDAH JATUH TEMPO — WAKTU TERBAIK GACHA!`);
+      }
+      if (r.topPrizes) {
+        msgLines.push(`🎁 Hadiah UR: ${r.topPrizes}`);
+      }
+      await ntfy(title, msgLines.join('\n'));
+      await new Promise((resolve) => setTimeout(resolve, 700)); // jeda 700ms per notifikasi
+    }
+    console.log(`✓ ${rows.length} notifikasi pity kotak berhasil dikirim ke ntfy HP.`);
   }
 }
 
