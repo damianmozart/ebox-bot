@@ -362,6 +362,14 @@ Bukti pengiriman bot → ntfy (uji sungguhan, bukan mock):
   lebih awal memang aman, bukan klaim palsu.
 - ✅ Jalur join yang berhasil, "sudah ikut" (tidak dobel notif), kuota penuh, dan
   sesi Level 30 yang dilewati semuanya diuji lawan server tiruan.
+- ✅ **GitHub Actions**: `ebox-daily` dan `ebox-hunt` jalan sukses di repo publik
+  memakai token dari Secret `EBOX_CONFIG` (bukan token di file) — log cloud menulis
+  `⏳ hunt: V2 Treasure Hunt: buka 12.00 WIB` dan `⏳ free-draw: sudah draw hari ini`.
+- ✅ **Jalur pemicu cron-job.org** diuji persis seperti dokumentasinya:
+  `POST /repos/.../dispatches {"event_type":"tick"}` → `204` → run `ebox-hunt` sukses.
+- ✅ **Mode `--await`**: di server tiruan terbukti *menunggu* ~4,5 detik sampai sesi
+  buka lalu join (bukan menembak di awal), dan keluar dalam ~0,1 detik kalau sesi
+  masih jauh — supaya dispatch tiap menit tidak menumpuk.
 - ⬜ **Join sungguhan saat 12:00 WIB** belum terjadi — jadwalnya baru terpasang
   dan akan terbukti pada run pertama di jam itu.
 - ⬜ **Klaim poin** belum pernah jalan di server asli — jadwal per jam baru akan
