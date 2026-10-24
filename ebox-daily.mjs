@@ -222,11 +222,14 @@ async function dailyBoxes(token) {
     }
   }
 
+  const nextUnlocked = list.find((b) => !b.is_locked && b.next_available_at);
   const msg = claimed.length
     ? `klaim ${claimed.length} box: ${claimed.map((c) => c.prize || c.box).join(', ')}`
     : available.length
       ? `${available.length} siap, ${locked.length} terkunci`
-      : `${locked.length} terkunci, 0 siap`;
+      : nextUnlocked
+        ? `${nextUnlocked.level_name || nextUnlocked.name} buka ${jamWib(nextUnlocked.next_available_at)} (${locked.length} terkunci)`
+        : `${locked.length} terkunci, 0 siap`;
   return {
     step: 'boxes',
     kind: claimed.length ? 'won' : failed.length ? 'error' : available.length ? 'ready' : 'already',
@@ -412,6 +415,33 @@ async function snapshot(token) {
     const amt = pb.data?.data?.amount;
     if (amt != null && amt !== '') out.poin = Number(amt);
   } catch { /* abaikan */ }
+  try {
+    const h = await api('/player/draw-history', { token, body: { page: 1, per_page: 100 }, json: true });
+    const rows = Array.isArray(h.data?.data?.data)
+      ? h.data.data.data
+      : Array.isArray(h.data?.data)
+      ? h.data.data
+      : [];
+    if (rows.length) {
+      let ur = 0;
+      let ssr = 0;
+      let foundUR = false;
+      let foundSSR = false;
+      for (const item of rows) {
+        const grade = item.grade_name || '';
+        if (!foundUR) {
+          if (grade === 'UR') foundUR = true;
+          else ur++;
+        }
+        if (!foundSSR) {
+          if (grade === 'SSR' || grade === 'UR') foundSSR = true;
+          else ssr++;
+        }
+        if (foundUR && foundSSR) break;
+      }
+      out.pity = { ur, ssr, total: h.data?.data?.total ?? h.data?.total ?? null };
+    }
+  } catch { /* abaikan */ }
   return out;
 }
 
@@ -518,6 +548,12 @@ async function main() {
   if (snap.saldo != null) ringkas.push(`💰 ${snap.symbol || 'Rp'}${angka(snap.saldo)}`);
   if (snap.poin != null) ringkas.push(`🎯 ${angka(snap.poin)} poin`);
   if (snap.level) ringkas.push(`⭐ ${snap.level}`);
+  if (snap.pity) {
+    const pBits = [];
+    if (snap.pity.ur != null) pBits.push(`${snap.pity.ur} no UR`);
+    if (snap.pity.ssr != null) pBits.push(`${snap.pity.ssr} no SSR`);
+    if (pBits.length) ringkas.push(`🎰 Pity: ${pBits.join(' · ')}`);
+  }
 
   const detail = (ringkas.length ? [ringkas.join(' · '), ''] : []).concat(results.map((r) => {
     const icon = r.kind === 'won' ? '🎁' : r.kind === 'claimed' ? '✅' : r.kind === 'joined' ? '🏹' : r.kind === 'ready' ? '🎯' : r.kind === 'auth' ? '🔑' : r.kind === 'net' ? '🌐' : r.kind === 'error' ? '❌' : '⏳';
