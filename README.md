@@ -255,7 +255,7 @@ node ebox-daily.mjs --await     # tunggu detik buka lalu join (dipakai GitHub Ac
 node ebox-daily.mjs --check    # lihat status saja, tidak menulis
 node ebox-daily.mjs --json     # keluaran JSON (untuk diparse)
 node test-ebox-token.mjs       # 44 assertion: routing telepon/email, OTP, receive, share
-node test-ebox-daily.mjs       # 75 assertion: klaim, hunt, mode --await, notif
+node test-ebox-daily.mjs       # 78 assertion: klaim, hunt, mode --await, notif
 ```
 
 Token dibaca dari `EBOX_TOKEN` → `config.json` (`accounts[0].token`) →
@@ -386,6 +386,10 @@ Bukti pengiriman bot → ntfy (uji sungguhan, bukan mock):
 - ✅ **Mode `--await`**: di server tiruan terbukti *menunggu* ~4,5 detik sampai sesi
   buka lalu join (bukan menembak di awal), dan keluar dalam ~0,1 detik kalau sesi
   masih jauh — supaya dispatch tiap menit tidak menumpuk.
+- ✅ **`EBOX_NTFY_TOPIC=""` benar-benar mematikan notif** (regresi 24/10): dulu
+  string kosong lolos ke `ntfyTopic` di config, jadi tes malah menembak puluhan
+  notif palsu (hadiah tiruan + "sesi mati") ke HP. Sekarang env kosong = notif
+  mati, aksi tetap dijalankan, dan tes membuktikan 0 pesan terkirim ke server.
 - ⬜ **Join sungguhan saat 12:00 WIB** belum terjadi — jadwalnya baru terpasang
   dan akan terbukti pada run pertama di jam itu.
 - ⬜ **Klaim poin** belum pernah jalan di server asli — jadwal per jam baru akan

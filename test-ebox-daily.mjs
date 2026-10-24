@@ -417,6 +417,25 @@ try {
     ok(!/❌/.test(isi2), 'tidak ada baris error gara-gara saldo gagal');
     state.balanceDown = false;
 
+    /* Regresi 24/10 09:16–09:58: EBOX_NTFY_TOPIC="" sengaja diset tes supaya
+     * tidak mengirim ke HP, tapi `||` membuatnya bocor ke ntfyTopic di
+     * config.json → tes menembak notif palsu ke HP. Sekarang env "" = mati. */
+    console.log('19. EBOX_NTFY_TOPIC="" benar-benar menonaktifkan notif');
+    state.hunt = { open: true, joined: false, canJoin: true };
+    state.boxesAvailable = true;          // paksa ada aksi biar notif pasti dicoba
+    state.calls.length = 0;
+    const silentDir = mkdtempSync(path.join(tmpdir(), 'ebox-silent-'));
+    const beforeSilent = huntNtfy.messages.length;
+    try {
+      h = await runBot(base, silentDir, [], { EBOX_NTFY_TOPIC: '', EBOX_NTFY_URL: huntNtfy.url });
+      ok(h.code === 0, 'exit 0');
+      ok(state.calls.includes('/player/redeem-daily-box') && state.calls.includes('/player/free-hunt-join'),
+        'bot tetap menembak aksi (bukan dibungkam diam-diam)');
+      ok(huntNtfy.messages.length === beforeSilent, `tidak ada notif terkirim (dapat ${huntNtfy.messages.length - beforeSilent})`);
+    } finally {
+      rmSync(silentDir, { recursive: true, force: true });
+    }
+
     console.log('18. --await saat sesi masih jauh: keluar cepat tanpa join');
     state.hunt = { open: false, joined: false, openAt: '2026-10-24 19:00:00', openMs: Date.parse('2026-10-24T19:00:00Z') };
     state.calls.length = 0;

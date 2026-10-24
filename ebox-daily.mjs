@@ -45,8 +45,17 @@ const CFG = (() => {
 
 // Override dipakai tes lawan server tiruan (sama seperti BOXKIA_FREEBOX_API_BASE).
 const API = (process.env.EBOX_API_BASE || CFG.apiBase || 'https://admin.ebox.zone/api').replace(/\/$/, '');
-const NTFY_TOPIC = process.env.EBOX_NTFY_TOPIC || CFG.ntfyTopic || '';
-const NTFY_URL = process.env.EBOX_NTFY_URL || 'https://ntfy.sh/';
+/* `EBOX_NTFY_TOPIC` '' (string kosong) berarti NOTIF MATI — bukan "pakai dari
+ * config". Operator `||` biasa membuat string kosong lolos ke ntfyTopic di
+ * config.json, sehingga tes (yang sengaja mengosongkan env itu) malah
+ * menembak notif sungguhan ke HP — kejadian 24/10 09:16–09:58: puluhan pesan
+ * palsu berisi hadiah tiruan & "sesi mati". */
+const NTFY_TOPIC = (process.env.EBOX_NTFY_TOPIC !== undefined
+  ? process.env.EBOX_NTFY_TOPIC
+  : CFG.ntfyTopic || '').trim();
+const NTFY_URL = process.env.EBOX_NTFY_URL !== undefined
+  ? process.env.EBOX_NTFY_URL
+  : 'https://ntfy.sh/';
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 const LOG_FILE = path.join(DATA_DIR, 'ebox-daily.log');
 const STATE_FILE = path.join(DATA_DIR, 'ebox-notify-state.json');
