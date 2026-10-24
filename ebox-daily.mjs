@@ -66,9 +66,14 @@ const NOTIFY_ALL = args.has('--notify-all');
 // menit akan melewatkan jendela 10 menit itu sepenuhnya.
 //   ARM  : seberapa awal boleh mulai menunggu (detik sebelum buka)
 //   LEAD : tembak sedikit sebelum jam buka supaya request mendarat tepat waktu
+// Tembak 0,5 detik sebelum jam buka supaya request sudah di jalan saat server
+// membuka sesi; kalau masih ditolak, ulang tiap 0,7 detik. Dengan lead 1,2s /
+// retry 2,5s (nilai lama) tembakan pertama selalu mendarat terlalu awal lalu
+// percobaan berikutnya baru 1,3 detik setelah sesi buka — terlalu lambat untuk
+// kuota yang penuh dalam hitungan detik.
 const HUNT_ARM_MS = Number(process.env.EBOX_HUNT_ARM_MS || 120000);
-const HUNT_LEAD_MS = Number(process.env.EBOX_HUNT_LEAD_MS || 1200);
-const HUNT_RETRY_MS = Number(process.env.EBOX_HUNT_RETRY_MS || 2500);
+const HUNT_LEAD_MS = Number(process.env.EBOX_HUNT_LEAD_MS || 500);
+const HUNT_RETRY_MS = Number(process.env.EBOX_HUNT_RETRY_MS || 700);
 const HUNT_RETRY_MAX = Number(process.env.EBOX_HUNT_RETRY_MAX || 40);
 const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 const JSON_OUT = args.has('--json');
@@ -241,6 +246,10 @@ function jamWib(utcString) {
   return `${jam} WIB`;
 }
 
+/* Daftar sesi yang layak untuk akun ini, dipakai sebagai bahan notifikasi
+ * ("bisa diikuti hari ini"). Diisi ulang setiap huntSessions() dipanggil. */
+let HUNT_SESSIONS = [];
+
 /* Ambil sesi hari ini + level akun, lalu saring yang memang milik kita. */
 async function huntSessions(token) {
   // `date` yang diminta server adalah tanggal server (UTC), bukan tanggal lokal.
@@ -254,6 +263,10 @@ async function huntSessions(token) {
   const myLevel = levelOf(prof.data.data?.level?.level_name);
 
   const mine = sessions.filter((s) => Number(s.type) === 1 && levelOf(s.level_name) <= myLevel);
+  HUNT_SESSIONS = mine.map((s) => ({
+    name: s.name, level: s.level_name, open_at: s.open_at,
+    prize: s.sub_product_name || null, joined: Boolean(s.is_joined),
+  }));
   return { sessions, mine, myLevel };
 }
 
@@ -362,6 +375,34 @@ async function freeHuntAwait(token) {
   return { step: 'hunt', kind: 'error', msg: `gagal ikut ${target.name}: ${lastWhy}` };
 }
 
+/* Ringkasan akun untuk isi notifikasi: saldo, poin, level. Semua best-effort
+ * — kalau salah satu endpoint bermasalah, notifikasi tetap terkirim tanpa
+ * baris itu. Endpoint saldo/poin yang error TIDAK boleh membuat bot melapor
+ * "ada masalah" (itu yang bikin notif palsu). */
+async function snapshot(token) {
+  const out = {};
+  try {
+    const p = await api('/player/profile', { token });
+    if (p.status === 200 && p.data?.status) {
+      out.level = p.data.data?.level?.level_name || null;
+      out.symbol = p.data.data?.user?.currency_symbol || 'Rp';
+    }
+  } catch { /* abaikan */ }
+  try {
+    const b = await api('/player/wallet-balance', { token });
+    const amt = b.data?.data?.amount;
+    if (amt != null && amt !== '') out.saldo = Number(amt);
+  } catch { /* abaikan */ }
+  try {
+    const pb = await api('/player/point-balance', { token });
+    const amt = pb.data?.data?.amount;
+    if (amt != null && amt !== '') out.poin = Number(amt);
+  } catch { /* abaikan */ }
+  return out;
+}
+
+const angka = (n) => Number(n).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 async function ntfy(title, msg) {
   if (!NTFY_TOPIC) return false;
   try {
@@ -421,7 +462,10 @@ async function main() {
   }
 
   const events = results.filter((r) => ['won', 'claimed', 'joined', 'ready'].includes(r.kind));
-  const hardErrors = results.filter((r) => r.kind === 'error' || r.kind === 'auth');
+  // Di mode --await (dipanggil tiap menit) sesi mati TIDAK dilaporkan: itu tugas
+  // run harian, supaya HP tidak dibanjiri pesan yang sama tiap menit.
+  const hardErrors = results.filter((r) =>
+    (r.kind === 'error' || r.kind === 'auth') && !(HUNT_AWAIT && r.kind === 'auth'));
   const netErrors = results.filter((r) => r.kind === 'net');
 
   if (JSON_OUT) {
@@ -451,7 +495,15 @@ async function main() {
         ? '✅ Ebox: klaim harian jalan'
         : '⚠️ Ebox: ada masalah';
 
-  const detail = results.map((r) => {
+  // Ringkasan akun ditaruh paling atas (seperti notif boxkia: saldo + progres),
+  // diambil hanya saat notifikasi memang akan dikirim.
+  const snap = await snapshot(token);
+  const ringkas = [];
+  if (snap.saldo != null) ringkas.push(`💰 ${snap.symbol || 'Rp'}${angka(snap.saldo)}`);
+  if (snap.poin != null) ringkas.push(`🎯 ${angka(snap.poin)} poin`);
+  if (snap.level) ringkas.push(`⭐ ${snap.level}`);
+
+  const detail = (ringkas.length ? [ringkas.join(' · '), ''] : []).concat(results.map((r) => {
     const icon = r.kind === 'won' ? '🎁' : r.kind === 'claimed' ? '✅' : r.kind === 'joined' ? '🏹' : r.kind === 'ready' ? '🎯' : r.kind === 'auth' ? '🔑' : r.kind === 'net' ? '🌐' : r.kind === 'error' ? '❌' : '⏳';
     const extra = r.step === 'boxes'
       ? [
@@ -460,7 +512,10 @@ async function main() {
         ].join('')
       : '';
     return `${icon} ${r.step}: ${r.msg}${extra}`;
-  }).join('\n');
+  }), HUNT_SESSIONS.length
+    ? ['', '— Hunt yang bisa kamu ikuti hari ini:']
+        .concat(HUNT_SESSIONS.map((s) => `   ${s.joined ? '✅' : '•'} ${jamWib(s.open_at)} ${s.name} (${s.level})${s.prize ? ` — ${s.prize}` : ''}`))
+    : []).join('\n');
 
   if (events.length) saveState({});        // kondisi berubah → buka kunci notif
   else if (!NOTIFY_ALL) {

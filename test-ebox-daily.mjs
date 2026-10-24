@@ -96,7 +96,14 @@ function mockApi() {
         });
       }
       if (url === '/player/profile') {
-        return send(200, { status: true, data: { level: { level_name: 'Level 5' }, user: { id: 1 } } });
+        return send(200, { status: true, data: { level: { level_name: 'Level 5' }, user: { id: 1, currency_symbol: 'Rp' } } });
+      }
+      if (url === '/player/wallet-balance') {
+        if (state.balanceDown) return send(500, { status: false, message: 'balance down' });
+        return send(200, { status: true, data: { amount: '0.350000' } });
+      }
+      if (url === '/player/point-balance') {
+        return send(200, { status: true, data: { amount: '79.730000' } });
       }
       if (url === '/player/free-hunt-session-listing') {
         // Dua sesi: Level 2 (milik akun Level 5) dan Level 30 (tidak memenuhi
@@ -355,6 +362,14 @@ try {
     ok(state.hunt.joined === true, 'server menerima join');
     ok(huntNtfy.messages.length === 1, `1 notif (dapat ${huntNtfy.messages.length})`);
     ok(/ikut Treasure Hunt/.test(String(huntNtfy.messages[0]?.title || '')), 'judul notif menyebut Treasure Hunt');
+    // Isi notif harus "kaya" seperti boxkia: saldo, poin, level, dan daftar
+    // hunt lain yang bisa diikuti — bukan cuma satu baris hasil.
+    const isi = String(huntNtfy.messages[0]?.message || '');
+    ok(/Rp0,35/.test(isi), 'saldo ada di notif');
+    ok(/79,73 poin/.test(isi), 'poin ada di notif');
+    ok(/Level 5/.test(isi), 'level ada di notif');
+    ok(/Hunt yang bisa kamu ikuti hari ini/.test(isi), 'daftar hunt hari ini ada di notif');
+    ok(/V30 Treasure Hunt/.test(isi) === false, 'sesi Level 30 tidak ikut didaftar (bukan milik kita)');
 
     console.log('15. run berikutnya: sudah ikut → tidak join ulang, tidak notif ulang');
     state.calls.length = 0;
@@ -390,15 +405,28 @@ try {
     ok(/🏹 hunt: V2 Treasure Hunt/.test(h.stdout), 'log melaporkan sesi yang diikuti');
     ok(huntNtfy.messages.length === 2, `notif join terkirim (total ${huntNtfy.messages.length})`);
 
+    console.log('18b. saldo/poin gagal diambil: notif tetap terkirim, tanpa error palsu');
+    state.hunt = { open: true, joined: false, canJoin: true };
+    state.balanceDown = true;
+    const before = huntNtfy.messages.length;
+    h = await runBot(base, huntDir, ['--hunt-only'], huntEnv);
+    const isi2 = String(huntNtfy.messages[before]?.message || '');
+    ok(huntNtfy.messages.length === before + 1, 'notif join tetap terkirim');
+    ok(!/Rp/.test(isi2), 'baris saldo dilewati (bukan angka palsu)');
+    ok(/poin/.test(isi2), 'poin tetap tampil');
+    ok(!/❌/.test(isi2), 'tidak ada baris error gara-gara saldo gagal');
+    state.balanceDown = false;
+
     console.log('18. --await saat sesi masih jauh: keluar cepat tanpa join');
     state.hunt = { open: false, joined: false, openAt: '2026-10-24 19:00:00', openMs: Date.parse('2026-10-24T19:00:00Z') };
     state.calls.length = 0;
+    const notifSebelum = huntNtfy.messages.length;
     const t1 = Date.now();
     h = await runBot(base, huntDir, ['--await'], huntEnv);
     ok(Date.now() - t1 < 8000, `tidak menunggu berjam-jam (${Date.now() - t1} ms)`);
     ok(/belum masuk jendela/.test(h.stdout), 'menjelaskan belum masuk jendela');
     ok(!state.calls.includes('/player/free-hunt-join'), 'tidak menembak join');
-    ok(huntNtfy.messages.length === 2, 'tidak ada notif tambahan');
+    ok(huntNtfy.messages.length === notifSebelum, 'tidak ada notif tambahan');
   } finally {
     rmSync(huntDir, { recursive: true, force: true });
     if (huntNtfy.server.listening) huntNtfy.server.close();

@@ -31,6 +31,17 @@ jobs:
         with:
           node-version: 20
 
+      # State + log ikut disimpan antar run: kondisi gagal yang menetap (mis.
+      # sesi mati) harus dibungkam 6 jam, bukan dikirim ulang tiap jam.
+      - name: Pulihkan state notifikasi
+        uses: actions/cache@v4
+        with:
+          path: |
+            ebox-notify-state.json
+            ebox-daily.log
+          key: ebox-daily-state-${{ github.run_id }}
+          restore-keys: ebox-daily-state-
+
       - name: Tulis config.json dari Secrets
         env:
           EBOX_CONFIG: ${{ secrets.EBOX_CONFIG }}

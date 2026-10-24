@@ -255,7 +255,7 @@ node ebox-daily.mjs --await     # tunggu detik buka lalu join (dipakai GitHub Ac
 node ebox-daily.mjs --check    # lihat status saja, tidak menulis
 node ebox-daily.mjs --json     # keluaran JSON (untuk diparse)
 node test-ebox-token.mjs       # 44 assertion: routing telepon/email, OTP, receive, share
-node test-ebox-daily.mjs       # 66 assertion: klaim, hunt, mode --await, notif
+node test-ebox-daily.mjs       # 75 assertion: klaim, hunt, mode --await, notif
 ```
 
 Token dibaca dari `EBOX_TOKEN` → `config.json` (`accounts[0].token`) →
@@ -308,9 +308,25 @@ bertambah, dan tiap run tetap 3 request ke server mereka.
 
 ## Notifikasi ntfy
 
-Bot mengirim pesan ke ntfy.sh saat **ada aksi** (hadiah, poin diklaim) atau
-**ada error non-jaringan** (mis. sesi mati). Kondisi gagal yang menetap dibungkam
-jeda 6 jam, dan `--check` tidak pernah mengirim apa pun.
+Bot mengirim pesan ke ntfy.sh saat **ada aksi** (hadiah, poin diklaim, ikut
+hunt) atau **ada error non-jaringan** (mis. sesi mati). Kondisi gagal yang
+menetap dibungkam jeda 6 jam, dan `--check` tidak pernah mengirim apa pun.
+
+Isi pesannya lengkap seperti boxkia — konteks akun dulu, baru hasil:
+
+```
+💰 Rp0,35 · 🎯 79,73 poin · ⭐ Level 5
+
+🏹 hunt: V2 Treasure Hunt → RC Drift Car
+
+— Hunt yang bisa kamu ikuti hari ini:
+   • 12.00 WIB V2 Treasure Hunt (Level 2) — RC Drift Car
+```
+
+Saldo/poin/level bersifat *best-effort*: endpointnya gagal → barisnya dihilangkan,
+bukan dijadikan notif error. Mau lihat isinya tanpa mengirim ke HP? Jalankan
+`node tools/ntfy-echo.mjs 8899` di satu terminal, lalu
+`EBOX_NTFY_URL=http://127.0.0.1:8899/ EBOX_NTFY_TOPIC=uji node ebox-daily.mjs --notify-all`.
 
 ```json
 // config.json (gitignored)

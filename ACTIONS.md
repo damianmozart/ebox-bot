@@ -15,14 +15,40 @@ didiamkan sama sekali saat antrean repo sedang padat. Jadi `ebox-hunt` tidak
 menembak sekali lalu menyerah:
 
 1. dipanggil tiap menit (pemicu utama: cron-job.org, lihat bawah),
-2. kalau sesi berikutnya **masih >90 detik** lagi → job langsung keluar (murah),
-3. kalau **≤90 detik** → job tidur memakai **jam server** (bukan jam runner
-   yang bisa meleset) sampai detik buka, tembak join,
-4. kalau server masih menjawab `has not opened yet`, ulangi tiap **2,5 detik**
-   sampai 100 detik.
+2. kalau sesi berikutnya **masih >2 menit** lagi → job langsung keluar (murah),
+3. kalau **≤2 menit** → job tidur memakai **jam server** (bukan jam runner
+   yang bisa meleset) sampai sesi buka, lalu menembak join **0,5 detik sebelum**
+   jam buka,
+4. kalau server masih menjawab `has not opened yet`, ulangi tiap **0,7 detik**
+   sampai ~28 detik.
+
+Dengan begitu tembakan pertama sudah di jalan saat server membuka sesi, dan
+percobaan berikutnya mendarat ±0,2 detik setelah jam buka — bukan 1–3 detik
+setelahnya seperti versi lead 1,2 s / retry 2,5 s.
 
 Hasilnya: telat 1–2 menit pun tetap ikut, karena job-nya *menunggu*, bukan
 menembak sekali di detik yang salah.
+
+## Isi notifikasi
+
+Seperti boxkia, satu pesan memuat konteks akun, bukan cuma hasil satu langkah:
+
+```
+💰 Rp0,35 · 🎯 79,73 poin · ⭐ Level 5
+
+🏹 hunt: V2 Treasure Hunt → RC Drift Car
+
+— Hunt yang bisa kamu ikuti hari ini:
+   • 12.00 WIB V2 Treasure Hunt (Level 2) — RC Drift Car
+```
+
+Saldo/poin/level diambil *best-effort*: kalau endpointnya bermasalah, barisnya
+dihilangkan diam-diam — **tidak** memicu notif "ada masalah".
+
+State notifikasi (sidik jari + waktu kirim terakhir) disimpan lewat `actions/cache`,
+sehingga kondisi gagal yang menetap tetap dibungkam 6 jam walau job jalan tiap
+menit. Mode `--await` juga tidak pernah melaporkan "sesi mati" — itu tugas run
+harian, supaya HP tidak berbunyi tiap menit.
 
 ## Rahasia tidak pernah masuk repo
 

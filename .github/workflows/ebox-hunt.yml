@@ -40,6 +40,15 @@ jobs:
         with:
           node-version: 20
 
+      # Tanpa ini, tiap run mulai dari state kosong → notif "gagal menetap"
+      # (mis. sesi mati) terkirim lagi tiap menit, bukan tiap 6 jam.
+      - name: Pulihkan state notifikasi
+        uses: actions/cache@v4
+        with:
+          path: ebox-notify-state.json
+          key: ebox-hunt-state-${{ github.run_id }}
+          restore-keys: ebox-hunt-state-
+
       - name: Tulis config.json dari Secrets
         env:
           EBOX_CONFIG: ${{ secrets.EBOX_CONFIG }}
@@ -54,7 +63,7 @@ jobs:
         env:
           # Mulai menunggu kalau buka tinggal ≤90 detik; tembak 1,2 detik lebih
           # awal supaya request mendarat tepat saat sesi terbuka.
-          EBOX_HUNT_ARM_MS: '90000'
-          EBOX_HUNT_LEAD_MS: '1200'
-          EBOX_HUNT_RETRY_MS: '2500'
+          EBOX_HUNT_ARM_MS: '120000'
+          EBOX_HUNT_LEAD_MS: '500'
+          EBOX_HUNT_RETRY_MS: '700'
         run: node ebox-daily.mjs --await
