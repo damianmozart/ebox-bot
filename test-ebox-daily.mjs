@@ -436,6 +436,23 @@ try {
       rmSync(silentDir, { recursive: true, force: true });
     }
 
+    /* --status-notify: baca saja + kirim SATU ringkasan berisi data asli.
+     * Dipakai untuk memastikan saluran ntfy jalan tanpa menunggu aksi nyata. */
+    console.log('20. --status-notify: satu notif ringkasan, tanpa menulis apa pun');
+    state.hunt = { open: false, joined: false, canJoin: false, openAt: '2026-10-24 19:00:00', openMs: Date.parse('2026-10-24T19:00:00Z') };
+    state.boxesAvailable = true;
+    state.calls.length = 0;
+    const beforeStatus = huntNtfy.messages.length;
+    h = await runBot(base, huntDir, ['--status-notify'], huntEnv);
+    ok(h.code === 0, 'exit 0');
+    ok(!state.calls.includes('/player/redeem-free-draw'), 'tidak menulis (hanya baca)');
+    ok(!state.calls.includes('/player/redeem-daily-box'), 'tidak mengklaim box');
+    ok(huntNtfy.messages.length === beforeStatus + 1, 'tepat satu notif terkirim');
+    const s = String(huntNtfy.messages[beforeStatus]?.message || '');
+    ok(/status terkini/.test(String(huntNtfy.messages[beforeStatus]?.title || '')), 'judul = status terkini');
+    ok(/Rp0,35/.test(s) && /79,73 poin/.test(s), 'memuat saldo & poin');
+    ok(/Hunt yang bisa kamu ikuti hari ini/.test(s), 'memuat daftar hunt');
+
     console.log('18. --await saat sesi masih jauh: keluar cepat tanpa join');
     state.hunt = { open: false, joined: false, openAt: '2026-10-24 19:00:00', openMs: Date.parse('2026-10-24T19:00:00Z') };
     state.calls.length = 0;

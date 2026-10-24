@@ -252,10 +252,11 @@ tidak pernah dicoba karena levelnya belum tercapai.
 node ebox-daily.mjs            # klaim + notif kalau ada aksi
 node ebox-daily.mjs --hunt-only # hanya Treasure Hunt (dipakai jadwal menit-an)
 node ebox-daily.mjs --await     # tunggu detik buka lalu join (dipakai GitHub Actions)
+node ebox-daily.mjs --status-notify  # kirim SATU ringkasan berisi data asli (tidak menulis apa pun)
 node ebox-daily.mjs --check    # lihat status saja, tidak menulis
 node ebox-daily.mjs --json     # keluaran JSON (untuk diparse)
 node test-ebox-token.mjs       # 44 assertion: routing telepon/email, OTP, receive, share
-node test-ebox-daily.mjs       # 78 assertion: klaim, hunt, mode --await, notif
+node test-ebox-daily.mjs       # 85 assertion: klaim, hunt, mode --await, notif
 ```
 
 Token dibaca dari `EBOX_TOKEN` → `config.json` (`accounts[0].token`) →
@@ -322,6 +323,15 @@ Isi pesannya lengkap seperti boxkia — konteks akun dulu, baru hasil:
 — Hunt yang bisa kamu ikuti hari ini:
    • 12.00 WIB V2 Treasure Hunt (Level 2) — RC Drift Car
 ```
+
+Mau melihat isi notifikasi sungguhan kapan saja tanpa menunggu aksi:
+
+```bash
+node ebox-daily.mjs --status-notify   # kirim ringkasan di atas ke topik asli
+```
+
+Mode ini hanya **membaca** (tidak pernah mengklaim apa pun) dan mengirim tepat
+satu pesan berjudul `📊 Ebox: status terkini`.
 
 Saldo/poin/level bersifat *best-effort*: endpointnya gagal → barisnya dihilangkan,
 bukan dijadikan notif error. Mau lihat isinya tanpa mengirim ke HP? Jalankan

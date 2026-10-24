@@ -20,6 +20,9 @@
  *
  * Mode:
  *   node ebox-daily.mjs                — klaim yang siap, notif kalau ada aksi
+ *   node ebox-daily.mjs --status-notify — baca status TANPA menulis, lalu kirim
+ *                                        SATU notif ringkasan (data asli) —
+ *                                        untuk memastikan saluran ntfy jalan
  *   node ebox-daily.mjs --hunt-only    — hanya cek/ikuti Treasure Hunt (dipakai
  *                                        jadwal menit-an di jendela 12:00 WIB)
  *   node ebox-daily.mjs --await        — tunggu sampai detik buka lalu ikut
@@ -65,7 +68,9 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const TRANSIENT = /fetch failed|aborted|timeout|socket|ECONN|EAI_AGAIN|terminated|network/i;
 
 const args = new Set(process.argv.slice(2));
-const CHECK_ONLY = args.has('--check');
+// --status-notify = mode baca saja (--check) yang juga MENGIRIM satu ringkasan.
+const STATUS_NOTIFY = args.has('--status-notify');
+const CHECK_ONLY = args.has('--check') || STATUS_NOTIFY;
 const HUNT_ONLY = args.has('--hunt-only');
 const HUNT_AWAIT = args.has('--await');
 const NOTIFY_ALL = args.has('--notify-all');
@@ -488,7 +493,7 @@ async function main() {
   // `--check` itu alat diagnostik: selalu DIAM di HP (sama seperti
   // freebox-draw.mjs di boxkia-bot). Tanpa ini, rutin "cek status" tiap jam
   // berubah jadi notifikasi tiap jam hanya karena box sedang siap.
-  const worth = !CHECK_ONLY && (NOTIFY_ALL || events.length > 0 || hardErrors.length > 0);
+  const worth = STATUS_NOTIFY || (!CHECK_ONLY && (NOTIFY_ALL || events.length > 0 || hardErrors.length > 0));
   if (!worth) {
     if (CHECK_ONLY) log('  (mode cek — notif tidak dikirim)');
     else if (netErrors.length) log('  (gangguan jaringan — notif dilewati)');
@@ -496,7 +501,9 @@ async function main() {
     return;
   }
 
-  const head = results.some((r) => r.kind === 'won')
+  const head = STATUS_NOTIFY
+    ? '📊 Ebox: status terkini'
+    : results.some((r) => r.kind === 'won')
     ? '🎁 Ebox: dapat hadiah!'
     : results.some((r) => r.kind === 'joined')
       ? '🏹 Ebox: ikut Treasure Hunt'
@@ -526,6 +533,7 @@ async function main() {
         .concat(HUNT_SESSIONS.map((s) => `   ${s.joined ? '✅' : '•'} ${jamWib(s.open_at)} ${s.name} (${s.level})${s.prize ? ` — ${s.prize}` : ''}`))
     : []).join('\n');
 
+  if (STATUS_NOTIFY) { await ntfy(head, detail); return; }   // selalu kirim, tanpa jeda
   if (events.length) saveState({});        // kondisi berubah → buka kunci notif
   else if (!NOTIFY_ALL) {
     const sig = results.map((r) => `${r.step}:${r.kind}:${r.msg}`).join('|');
