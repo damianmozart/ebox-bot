@@ -1,0 +1,13 @@
+# Token & konfigurasi rahasia — jangan pernah di-commit
+.ebox-token
+config.json
+config.json.bak.*
+
+# Runtime: log & state (dibuat bot saat jalan)
+*.log
+*.log.*
+*-state.json
+
+# Artefak riset bundle (hasil unduh chunk JS ebox.zone)
+.cache/
+node_modules/

@@ -1,0 +1,45 @@
+# Klaim harian Ebox: free draw, poin harian, box harian per level.
+#
+# Cron tiap jam di menit :07 — sengaja bukan menit :00, karena itu slot paling
+# padat sedunia dan GitHub suka mendiamkan run terjadwal di jam sibuk. Klaim
+# harian punya jendela sepanjang hari, jadi telat beberapa menit (bahkan satu
+# jam) tidak masalah: run berikutnya tetap menangkap yang belum diklaim.
+#
+# Token & topik ntfy TIDAK ikut ter-commit — ditulis dari Secret EBOX_CONFIG
+# saat job berjalan (lihat ACTIONS.md).
+name: ebox-daily
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  repository_dispatch:
+    types: [daily]
+  workflow_dispatch:
+
+concurrency:
+  group: ebox-daily
+  cancel-in-progress: false
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Tulis config.json dari Secrets
+        env:
+          EBOX_CONFIG: ${{ secrets.EBOX_CONFIG }}
+        run: |
+          if [ -z "$EBOX_CONFIG" ]; then
+            echo "::error::Secret EBOX_CONFIG kosong. Lihat ACTIONS.md."
+            exit 1
+          fi
+          printf '%s' "$EBOX_CONFIG" > config.json
+
+      - name: Klaim harian
+        run: node ebox-daily.mjs

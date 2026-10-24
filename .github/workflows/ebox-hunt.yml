@@ -1,0 +1,60 @@
+# Treasure Hunt ("free hunt") — sesi buka 10 menit sekali sehari:
+# V2 (Level 2+) buka 05:00 UTC = 12:00 WIB, diundi 12:10 WIB.
+#
+# Kenapa tidak sekadar "cron tepat jam 12:00"? Cron GitHub (dan penerusnya)
+# sering telat puluhan detik sampai beberapa menit, sedangkan jendelanya 10
+# menit. Jadi pola yang dipakai di sini SAMA seperti boxkia-bot:
+#
+#   dipanggil tiap menit  →  job mengecek sesi berikutnya
+#     • masih jauh (>90 detik)  : langsung keluar, murah
+#     • ≤90 detik lagi          : tidur memakai jam SERVER sampai detik buka,
+#                                 lalu tembak join; kalau server bilang
+#                                 "belum buka", coba lagi tiap 2,5 detik
+#
+# Hasilnya: telat 1-2 menit pun tetap ikut, karena job-nya menunggu — bukan
+# menembak sekali lalu menyerah.
+#
+# Pemicu utama: repository_dispatch 'tick' dari cron-job.org tiap menit
+# (lihat ACTIONS.md). Cron */5 di bawah ini cuma cadangan.
+name: ebox-hunt
+
+on:
+  repository_dispatch:
+    types: [tick, hunt]
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ebox-hunt
+  cancel-in-progress: false
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Tulis config.json dari Secrets
+        env:
+          EBOX_CONFIG: ${{ secrets.EBOX_CONFIG }}
+        run: |
+          if [ -z "$EBOX_CONFIG" ]; then
+            echo "::error::Secret EBOX_CONFIG kosong. Lihat ACTIONS.md."
+            exit 1
+          fi
+          printf '%s' "$EBOX_CONFIG" > config.json
+
+      - name: Ikut Treasure Hunt (tunggu jam buka)
+        env:
+          # Mulai menunggu kalau buka tinggal ≤90 detik; tembak 1,2 detik lebih
+          # awal supaya request mendarat tepat saat sesi terbuka.
+          EBOX_HUNT_ARM_MS: '90000'
+          EBOX_HUNT_LEAD_MS: '1200'
+          EBOX_HUNT_RETRY_MS: '2500'
+        run: node ebox-daily.mjs --await

@@ -1,0 +1,10 @@
+{
+  "_catatan": "Salin jadi config.json. File ini TIDAK di-commit (bisa berisi token).",
+  "ntfyTopic": "ebox-alert-xxxxxxxxxxxx",
+  "accounts": [
+    {
+      "name": "akun-utama",
+      "token": "3207|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+  ]
+}

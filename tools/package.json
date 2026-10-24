@@ -1,0 +1,9 @@
+{
+  "name": "ebox-bot-tools",
+  "private": true,
+  "type": "module",
+  "description": "Alat bantu deploy: dorong config.json + token ke GitHub Secret EBOX_CONFIG",
+  "dependencies": {
+    "libsodium-wrappers": "^0.7.15"
+  }
+}
