@@ -6,10 +6,10 @@
 # menit. Jadi pola yang dipakai di sini SAMA seperti boxkia-bot:
 #
 #   dipanggil tiap menit  →  job mengecek sesi berikutnya
-#     • masih jauh (>90 detik)  : langsung keluar, murah
-#     • ≤90 detik lagi          : tidur memakai jam SERVER sampai detik buka,
-#                                 lalu tembak join; kalau server bilang
-#                                 "belum buka", coba lagi tiap 2,5 detik
+#     • masih jauh (>2 menit)   : langsung keluar, murah
+#     • ≤2 menit lagi           : tidur memakai jam SERVER sampai detik buka,
+#                                 tembak 0,5 detik sebelum buka; kalau server
+#                                 bilang "belum buka", ulangi tiap 0,7 detik
 #
 # Hasilnya: telat 1-2 menit pun tetap ikut, karena job-nya menunggu — bukan
 # menembak sekali lalu menyerah.
@@ -23,6 +23,11 @@ on:
     types: [tick, hunt]
   schedule:
     - cron: '*/5 * * * *'
+    # Jaring pengaman khusus jendela buka: 04:58–04:59 dan 05:00–05:09 UTC
+    # (11:58–12:09 WIB). Cron GitHub tetap bisa telat, jadi ini bukan pengganti
+    # pemicu tiap menit — cuma menambah percobaan di menit-menit penting.
+    - cron: '58,59 4 * * *'
+    - cron: '0-9 5 * * *'
   workflow_dispatch:
 
 concurrency:
