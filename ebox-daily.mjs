@@ -279,12 +279,44 @@ async function huntSessions(token) {
   if (prof.status !== 200 || !prof.data?.status) return { ...describeFailure(prof), step: 'hunt' };
   const myLevel = levelOf(prof.data.data?.level?.level_name);
 
-  const mine = sessions.filter((s) => Number(s.type) === 1 && levelOf(s.level_name) <= myLevel);
-  HUNT_SESSIONS = mine.map((s) => ({
-    name: s.name, level: s.level_name, open_at: s.open_at,
-    prize: s.sub_product_name || null, joined: Boolean(s.is_joined),
-  }));
-  return { sessions, mine, myLevel };
+  // Ambil total spend / turnover untuk sesi yang mensyaratkan min_spend (seperti Rain Pool)
+  let mySpend = 0;
+  try {
+    const to = await api('/player/turnover-history', { token, body: { page: 1, per_page: 5 }, json: true });
+    if (to.status === 200 && to.data?.status) {
+      mySpend = Number(to.data.data?.total_turnover || 0);
+    }
+  } catch { /* abaikan */ }
+
+  const mine = sessions.filter((s) => {
+    if (s.is_joined) return true;
+    const isLevel = Number(s.condition_type) === 1 || Number(s.type) === 1;
+    if (isLevel) {
+      const req = levelOf(s.level_name);
+      return req <= myLevel;
+    }
+    const isSpend = Number(s.condition_type) === 2 || Number(s.type) === 2;
+    if (isSpend) {
+      const minSpend = Number(s.min_spend || 0);
+      return mySpend <= 0 || minSpend <= mySpend;
+    }
+    return true;
+  });
+
+  HUNT_SESSIONS = mine.map((s) => {
+    const isRain = Number(s.type) === 2 || Number(s.condition_type) === 2;
+    const levelLabel = s.level_name || (isRain ? (s.min_spend ? `Min. Spend ${Number(s.min_spend).toLocaleString('id-ID')}` : 'Rain Pool') : 'Semua Level');
+    const prizeLabel = s.sub_product_name || (s.pool_amount ? `Pool Rp${Number(s.pool_amount).toLocaleString('id-ID')}` : null);
+    return {
+      name: s.name,
+      level: levelLabel,
+      open_at: s.open_at,
+      prize: prizeLabel,
+      joined: Boolean(s.is_joined),
+      session_id: s.session_id,
+    };
+  });
+  return { sessions, mine, myLevel, mySpend };
 }
 
 function joinableSession(s) {
@@ -320,6 +352,7 @@ async function freeHunt(token) {
       await notifyHuntJoined(token, s);
       continue;
     }
+    if (String(s.display_status) === 'ended' || Number(s.status) === 4) continue;
     const full = Number(s.current_participants) >= Number(s.max_participants) && Number(s.max_participants) > 0;
     if (full) { waiting.push(`${s.name}: kuota penuh`); continue; }
     if (!joinableSession(s)) {
@@ -365,7 +398,10 @@ async function freeHuntAwait(token) {
 
   const done = mine.filter((s) => s.is_joined);
   const targets = mine
-    .filter((s) => !s.is_joined && !(Number(s.current_participants) >= Number(s.max_participants) && Number(s.max_participants) > 0))
+    .filter((s) => !s.is_joined &&
+                   String(s.display_status) !== 'ended' &&
+                   Number(s.status) !== 4 &&
+                   !(Number(s.current_participants) >= Number(s.max_participants) && Number(s.max_participants) > 0))
     .sort((a, b) => Date.parse(String(a.open_at).replace(' ', 'T') + 'Z') - Date.parse(String(b.open_at).replace(' ', 'T') + 'Z'));
 
   if (!targets.length) {
@@ -511,10 +547,12 @@ async function notifyHuntPrep(token, target, waitMs) {
 
   const mins = Math.max(1, Math.round(waitMs / 60000));
   const minsLabel = mins <= 1 ? 'kurang dari 1 menit lagi' : `sekitar ${mins} menit lagi`;
-  const title = '🏹 [Ebox Hunt] Persiapan: Mau Masuk Hunt!';
-  const prize = target.sub_product_name || target.prize || 'Lihat di aplikasi';
+  const isRain = Number(target.type) === 2 || Number(target.condition_type) === 2;
+  const levelLabel = target.level_name || (isRain ? (target.min_spend ? `Min. Spend Rp${Number(target.min_spend).toLocaleString('id-ID')}.000` : 'Rain Pool') : ('Level ' + levelOf(target.name)));
+  const prize = target.sub_product_name || (target.pool_amount ? `Pool Rp${Number(target.pool_amount).toLocaleString('id-ID')}.000` : target.prize) || 'Lihat di aplikasi';
+  const title = `🏹 [Ebox Hunt] Persiapan: Mau Masuk ${target.name}!`;
   const lines = [
-    `⏰ Sesi: ${target.name} (${target.level_name || ('Level ' + levelOf(target.name))})`,
+    `⏰ Sesi: ${target.name} (${levelLabel})`,
     `🎁 Hadiah: ${prize}`,
     `🕒 Buka: ${jamWib(target.open_at)} (${minsLabel})`,
     `🤖 Status Bot: Standby & siap tembak otomatis saat detik buka.`,
@@ -540,12 +578,15 @@ async function notifyHuntJoined(token, target, { force = false } = {}) {
   if (snap.poin != null) ringkas.push(`🎯 ${angka(snap.poin)} poin`);
   if (snap.level) ringkas.push(`⭐ ${snap.level}`);
 
+  const isRain = Number(target.type) === 2 || Number(target.condition_type) === 2;
+  const levelLabel = target.level_name || (isRain ? (target.min_spend ? `Min. Spend Rp${Number(target.min_spend).toLocaleString('id-ID')}` : 'Rain Pool') : ('Level ' + levelOf(target.name)));
+  const prize = target.sub_product_name || (target.pool_amount ? `Pool Rp${Number(target.pool_amount).toLocaleString('id-ID')}.000` : target.prize) || '-';
+  const drawTime = target.draw_at ? jamWib(target.draw_at) : '10 menit setelah buka';
+
   const title = '🏹 Ebox: ikut Treasure Hunt (SUDAH MASUK)';
-  const prize = target.sub_product_name || target.prize || '-';
-  const drawTime = target.draw_at ? jamWib(target.draw_at) : '12.10 WIB (10 menit setelah buka)';
   const lines = [
     ...(ringkas.length ? [ringkas.join(' · '), ''] : []),
-    `✅ Berhasil masuk sesi: ${target.name} (${target.level_name || ('Level ' + levelOf(target.name))})`,
+    `✅ Berhasil masuk sesi: ${target.name} (${levelLabel})`,
     `🎁 Hadiah yang diperebutkan: ${prize}`,
     `⏰ Waktu Pengundian: ${drawTime}`,
     `🎫 Kamu sudah resmi terdaftar sebagai peserta!`,

@@ -1,8 +1,8 @@
 @echo off
 rem Pasang (atau timpa) dua jadwal Ebox dengan runner senyap (tanpa popup terminal):
 rem   1. "Ebox Daily"  — tiap jam, klaim free draw / poin / box harian
-rem   2. "Ebox Hunt"   — tiap menit 11:58-12:13 WIB, Treasure Hunt (jendela
-rem                      10 menit: buka 12:00, diundi 12:10)
+rem   2. "Ebox Hunt"   — tiap menit (standby auto-join untuk semua sesi Hunt & Rain Pool)
+rem                      Jika belum masuk jendela (<3 menit), langsung keluar cepat.
 rem Menggunakan wscript //B run-hidden.vbs agar jendela konsol tidak pernah muncul.
 setlocal
 set DAILY=Ebox Daily
@@ -16,7 +16,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-schtasks /Create /SC DAILY /TN "%HUNT%" /TR "%RUNNER% run-ebox-hunt.cmd" /ST 11:58 /RI 1 /DU 00:15 /F
+schtasks /Create /SC MINUTE /MO 1 /TN "%HUNT%" /TR "%RUNNER% run-ebox-hunt.cmd" /F
 if errorlevel 1 (
   echo GAGAL memasang jadwal Treasure Hunt.
   exit /b 1
