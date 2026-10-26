@@ -390,7 +390,7 @@ try {
      * (cron bisa telat), lalu menunggu sampai detik buka. Dua hal yang WAJIB
      * terbukti: dia benar-benar menunggu, dan dia keluar cepat kalau sesinya
      * masih jauh (supaya dispatch tiap menit tidak menumpuk). */
-    console.log('17. --await: tidur sampai jam buka lalu join');
+    console.log('17. --await: tidur sampai jam buka lalu join (kirim notif mau masuk & sudah masuk)');
     const openAtMs = Date.now() + 2500;
     const p2 = (n) => String(n).padStart(2, '0');
     const dd = new Date(openAtMs);
@@ -403,7 +403,9 @@ try {
     ok(Date.now() - t0 >= 1200, `benar-benar menunggu (${Date.now() - t0} ms)`);
     ok(!state.calls.includes('/player/redeem-free-draw'), 'tidak ikut klaim harian');
     ok(/🏹 hunt: V2 Treasure Hunt/.test(h.stdout), 'log melaporkan sesi yang diikuti');
-    ok(huntNtfy.messages.length === 2, `notif join terkirim (total ${huntNtfy.messages.length})`);
+    ok(huntNtfy.messages.length === 3, `notif mau masuk + sudah masuk terkirim (total ${huntNtfy.messages.length})`);
+    ok(/Mau Masuk|Persiapan/.test(huntNtfy.messages[1]?.title || ''), 'notif mau masuk terkirim saat persiapan');
+    ok(/SUDAH MASUK|ikut Treasure Hunt/.test(huntNtfy.messages[2]?.title || ''), 'notif sudah masuk terkirim saat join');
 
     console.log('18b. saldo/poin gagal diambil: notif tetap terkirim, tanpa error palsu');
     state.hunt = { open: true, joined: false, canJoin: true };
@@ -436,10 +438,14 @@ try {
       rmSync(silentDir, { recursive: true, force: true });
     }
 
+    const futureMs = Date.now() + 7 * 3600 * 1000;
+    const futureDate = new Date(futureMs);
+    const futureUtc = `${futureDate.getUTCFullYear()}-${p2(futureDate.getUTCMonth() + 1)}-${p2(futureDate.getUTCDate())} ${p2(futureDate.getUTCHours())}:${p2(futureDate.getUTCMinutes())}:${p2(futureDate.getUTCSeconds())}`;
+
     /* --status-notify: baca saja + kirim SATU ringkasan berisi data asli.
      * Dipakai untuk memastikan saluran ntfy jalan tanpa menunggu aksi nyata. */
     console.log('20. --status-notify: satu notif ringkasan, tanpa menulis apa pun');
-    state.hunt = { open: false, joined: false, canJoin: false, openAt: '2026-10-24 19:00:00', openMs: Date.parse('2026-10-24T19:00:00Z') };
+    state.hunt = { open: false, joined: false, canJoin: false, openAt: futureUtc, openMs: futureMs };
     state.boxesAvailable = true;
     state.calls.length = 0;
     const beforeStatus = huntNtfy.messages.length;
@@ -454,7 +460,7 @@ try {
     ok(/Hunt yang bisa kamu ikuti hari ini/.test(s), 'memuat daftar hunt');
 
     console.log('18. --await saat sesi masih jauh: keluar cepat tanpa join');
-    state.hunt = { open: false, joined: false, openAt: '2026-10-24 19:00:00', openMs: Date.parse('2026-10-24T19:00:00Z') };
+    state.hunt = { open: false, joined: false, openAt: futureUtc, openMs: futureMs };
     state.calls.length = 0;
     const notifSebelum = huntNtfy.messages.length;
     const t1 = Date.now();

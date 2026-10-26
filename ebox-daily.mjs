@@ -85,7 +85,7 @@ const NOTIFY_ALL = args.has('--notify-all');
 // retry 2,5s (nilai lama) tembakan pertama selalu mendarat terlalu awal lalu
 // percobaan berikutnya baru 1,3 detik setelah sesi buka — terlalu lambat untuk
 // kuota yang penuh dalam hitungan detik.
-const HUNT_ARM_MS = Number(process.env.EBOX_HUNT_ARM_MS || 120000);
+const HUNT_ARM_MS = Number(process.env.EBOX_HUNT_ARM_MS || 180000);
 const HUNT_LEAD_MS = Number(process.env.EBOX_HUNT_LEAD_MS || 500);
 const HUNT_RETRY_MS = Number(process.env.EBOX_HUNT_RETRY_MS || 700);
 const HUNT_RETRY_MAX = Number(process.env.EBOX_HUNT_RETRY_MAX || 40);
@@ -315,18 +315,34 @@ async function freeHunt(token) {
   const done = [];         // sudah ikut dari run sebelumnya (jangan notif lagi)
   const waiting = [];
   for (const s of mine) {
-    if (s.is_joined) { done.push(s.name); continue; }
+    if (s.is_joined) {
+      done.push(s.name);
+      await notifyHuntJoined(token, s);
+      continue;
+    }
     const full = Number(s.current_participants) >= Number(s.max_participants) && Number(s.max_participants) > 0;
     if (full) { waiting.push(`${s.name}: kuota penuh`); continue; }
-    if (!joinableSession(s)) { waiting.push(`${s.name}: buka ${jamWib(s.open_at)}`); continue; }
+    if (!joinableSession(s)) {
+      const openMs = Date.parse(String(s.open_at).replace(' ', 'T') + 'Z');
+      const waitMs = openMs - Date.now();
+      if (waitMs > 0 && waitMs <= HUNT_ARM_MS) {
+        await notifyHuntPrep(token, s, waitMs);
+      }
+      waiting.push(`${s.name}: buka ${jamWib(s.open_at)}`);
+      continue;
+    }
     if (CHECK_ONLY) return { step: 'hunt', kind: 'ready', msg: `siap ikut ${s.name} (mode cek)` };
 
     const r = await joinHunt(token, s);
-    if (r.ok) justJoined.push(`${s.name}${s.sub_product_name ? ` → ${s.sub_product_name}` : ''}`);
-    else waiting.push(`${s.name}: ${r.why}`);
+    if (r.ok) {
+      await notifyHuntJoined(token, s, { force: true });
+      justJoined.push(`${s.name}${s.sub_product_name ? ` → ${s.sub_product_name}` : ''}`);
+    } else {
+      waiting.push(`${s.name}: ${r.why}`);
+    }
   }
 
-  if (justJoined.length) return { step: 'hunt', kind: 'joined', msg: justJoined.join(', ') };
+  if (justJoined.length) return { step: 'hunt', kind: 'joined', msg: justJoined.join(', '), notifiedDirectly: true };
   if (waiting.length) return { step: 'hunt', kind: 'waiting', msg: waiting.join(' · ') };
   if (done.length) return { step: 'hunt', kind: 'already', msg: `sudah ikut ${done.join(', ')}` };
   return { step: 'hunt', kind: 'already', msg: 'tidak ada sesi baru' };
@@ -353,6 +369,11 @@ async function freeHuntAwait(token) {
     .sort((a, b) => Date.parse(String(a.open_at).replace(' ', 'T') + 'Z') - Date.parse(String(b.open_at).replace(' ', 'T') + 'Z'));
 
   if (!targets.length) {
+    if (done.length) {
+      for (const s of done) {
+        await notifyHuntJoined(token, s);
+      }
+    }
     return { step: 'hunt', kind: 'already', msg: done.length ? `sudah ikut ${done.map((s) => s.name).join(', ')}` : 'tidak ada sesi baru' };
   }
 
@@ -370,6 +391,7 @@ async function freeHuntAwait(token) {
   }
 
   if (waitMs > 0) {
+    await notifyHuntPrep(token, target, waitMs);
     log(`  ⏰ menunggu ${Math.round(waitMs / 1000)}s sampai ${jamWib(target.open_at)}`);
     await sleep(waitMs - HUNT_LEAD_MS);
   }
@@ -378,7 +400,13 @@ async function freeHuntAwait(token) {
   for (let i = 0; i < HUNT_RETRY_MAX; i++) {
     const r = await joinHunt(token, target);
     if (r.ok) {
-      return { step: 'hunt', kind: 'joined', msg: `${target.name}${target.sub_product_name ? ` → ${target.sub_product_name}` : ''}` };
+      await notifyHuntJoined(token, target, { force: true });
+      return {
+        step: 'hunt',
+        kind: 'joined',
+        msg: `${target.name}${target.sub_product_name ? ` → ${target.sub_product_name}` : ''}`,
+        notifiedDirectly: true,
+      };
     }
     lastWhy = r.why;
     // Ditolak karena alasan lain (bukan "belum buka") — tidak ada gunanya
@@ -474,6 +502,70 @@ function saveState(s) {
   } catch { /* abaikan */ }
 }
 
+async function notifyHuntPrep(token, target, waitMs) {
+  if (CHECK_ONLY) return false;
+  const day = (target.open_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const prepKey = `hunt_prep_${target.session_id || 'v2'}_${day}`;
+  const st = loadState();
+  if (st[prepKey]) return false;
+
+  const mins = Math.max(1, Math.round(waitMs / 60000));
+  const minsLabel = mins <= 1 ? 'kurang dari 1 menit lagi' : `sekitar ${mins} menit lagi`;
+  const title = '🏹 [Ebox Hunt] Persiapan: Mau Masuk Hunt!';
+  const prize = target.sub_product_name || target.prize || 'Lihat di aplikasi';
+  const lines = [
+    `⏰ Sesi: ${target.name} (${target.level_name || ('Level ' + levelOf(target.name))})`,
+    `🎁 Hadiah: ${prize}`,
+    `🕒 Buka: ${jamWib(target.open_at)} (${minsLabel})`,
+    `🤖 Status Bot: Standby & siap tembak otomatis saat detik buka.`,
+  ];
+  const sent = await ntfy(title, lines.join('\n'));
+  if (sent) {
+    saveState({ [prepKey]: Date.now() });
+    log(`  📣 Notif persiapan hunt ('mau masuk') terkirim: ${target.name}`);
+  }
+  return sent;
+}
+
+async function notifyHuntJoined(token, target, { force = false } = {}) {
+  if (CHECK_ONLY) return false;
+  const day = (target.open_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const joinKey = `hunt_joined_${target.session_id || 'v2'}_${day}`;
+  const st = loadState();
+  if (!force && st[joinKey]) return false;
+
+  const snap = await snapshot(token);
+  const ringkas = [];
+  if (snap.saldo != null) ringkas.push(`💰 ${snap.symbol || 'Rp'}${angka(snap.saldo)}`);
+  if (snap.poin != null) ringkas.push(`🎯 ${angka(snap.poin)} poin`);
+  if (snap.level) ringkas.push(`⭐ ${snap.level}`);
+
+  const title = '🏹 Ebox: ikut Treasure Hunt (SUDAH MASUK)';
+  const prize = target.sub_product_name || target.prize || '-';
+  const drawTime = target.draw_at ? jamWib(target.draw_at) : '12.10 WIB (10 menit setelah buka)';
+  const lines = [
+    ...(ringkas.length ? [ringkas.join(' · '), ''] : []),
+    `✅ Berhasil masuk sesi: ${target.name} (${target.level_name || ('Level ' + levelOf(target.name))})`,
+    `🎁 Hadiah yang diperebutkan: ${prize}`,
+    `⏰ Waktu Pengundian: ${drawTime}`,
+    `🎫 Kamu sudah resmi terdaftar sebagai peserta!`,
+  ];
+  if (HUNT_SESSIONS.length) {
+    lines.push('');
+    lines.push('— Hunt yang bisa kamu ikuti hari ini:');
+    for (const s of HUNT_SESSIONS) {
+      lines.push(`   ${s.joined || s.session_id === target.session_id ? '✅' : '•'} ${jamWib(s.open_at)} ${s.name} (${s.level})${s.prize ? ` — ${s.prize}` : ''}`);
+    }
+  }
+
+  const sent = await ntfy(title, lines.join('\n'));
+  if (sent) {
+    saveState({ [joinKey]: Date.now() });
+    log(`  🎉 Notif berhasil masuk hunt ('sudah masuk') terkirim: ${target.name}`);
+  }
+  return sent;
+}
+
 async function main() {
   const token = loadToken();
   if (!token) {
@@ -517,6 +609,14 @@ async function main() {
 
   if (JSON_OUT) {
     console.log(JSON.stringify({ at: new Date().toISOString(), checkOnly: CHECK_ONLY, results }, null, 2));
+  }
+
+  // Notif join sudah dikirim langsung oleh notifyHuntJoined jika step hunt berhasil join
+  const huntJoinedDirect = results.some((r) => r.step === 'hunt' && r.kind === 'joined' && r.notifiedDirectly);
+  const otherActionEvents = results.filter((r) => r.step !== 'hunt' && ['won', 'claimed', 'ready'].includes(r.kind));
+  if (huntJoinedDirect && otherActionEvents.length === 0 && !STATUS_NOTIFY && !isTimeForPeriodicStatus && !NOTIFY_ALL) {
+    if (events.length) saveState({});
+    return;
   }
 
   // Notif: hanya kalau ada aksi nyata, atau ada error non-jaringan. Kondisi
